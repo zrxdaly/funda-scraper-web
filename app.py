@@ -82,35 +82,121 @@ class OnlineFundaScraper:
                 'status': 'Success'
             }
             
-            # Extract address
-            address_selectors = ['h1', '[data-test-id="street-name-house-number"]', '.object-header__title']
+            # Extract address with multiple methods
+            # Method 1: Try common selectors
+            address_selectors = [
+                'h1',
+                '[data-test-id="street-name-house-number"]', 
+                '.object-header__title',
+                '.fd-color-dark-1',
+                'h1[class*="object"]',
+                '.object-address'
+            ]
+            
             for selector in address_selectors:
                 try:
                     element = soup.select_one(selector)
-                    if element:
-                        data['address'] = element.get_text(strip=True)
-                        break
+                    if element and element.get_text(strip=True):
+                        address_text = element.get_text(strip=True)
+                        # Filter out non-address text
+                        if len(address_text) > 10 and any(char.isdigit() for char in address_text):
+                            data['address'] = address_text
+                            break
                 except:
                     continue
             
-            # Extract price
-            price_patterns = [
-                ('€', '.000', 'k.k.'),
-                ('€', '.000', 'kosten koper'),
-                ('€', '.000', 'vk')
-            ]
+            # Method 2: Extract from page title if not found
+            if not data['address']:
+                try:
+                    title = soup.find('title')
+                    if title:
+                        title_text = title.get_text()
+                        # Extract address from title like "Wageningseberg 4, 3524 LR Utrecht - Funda"
+                        address_match = re.search(r'^([^-]+)', title_text)
+                        if address_match:
+                            potential_address = address_match.group(1).strip()
+                            if len(potential_address) > 10:
+                                data['address'] = potential_address
+                except:
+                    pass
             
-            for pattern in price_patterns:
-                price_elements = soup.find_all(text=re.compile(r'€.*\.000.*(?:k\.k\.|kosten koper|vk)', re.IGNORECASE))
-                if price_elements:
-                    for price_text in price_elements:
-                        if 'per maand' not in price_text.lower():
-                            data['asking_price'] = price_text.strip()
+            # Method 3: Look for address patterns in text
+            if not data['address']:
+                try:
+                    # Look for address patterns in all text
+                    page_text = soup.get_text()
+                    # Pattern for Dutch addresses: Street + number + postal code + city
+                    address_patterns = [
+                        r'([A-Za-z\s]+\s+\d+[A-Za-z]?[,\s]+\d{4}\s*[A-Z]{2}[,\s]+[A-Za-z\s]+)',
+                        r'([A-Za-z\s]+\s+\d+[A-Za-z]?[,\s\n]+[A-Za-z\s]+)'
+                    ]
+                    
+                    for pattern in address_patterns:
+                        matches = re.findall(pattern, page_text)
+                        for match in matches:
+                            if len(match) > 15 and len(match) < 100:  # Reasonable address length
+                                data['address'] = match.strip()
+                                break
+                        if data['address']:
                             break
-                    if data['asking_price']:
-                        break
+                except:
+                    pass
             
-            # Extract area from characteristics
+            # Extract price with improved method
+            # Method 1: Look for span elements with € and numbers
+            price_found = False
+            try:
+                # Find all text containing € and .000
+                all_text = soup.get_text()
+                price_patterns = [
+                    r'€\s*(\d{2,3}(?:\.\d{3})+)\s*k\.k\.',  # € 395.000 k.k.
+                    r'€\s*(\d{2,3}(?:\.\d{3})+)\s*kk',      # € 395.000 kk
+                    r'€\s*(\d{2,3}(?:\.\d{3})+)\s*kosten koper',  # € 395.000 kosten koper
+                    r'€\s*(\d{2,3}(?:\.\d{3})+)\s*vk',      # € 395.000 vk
+                    r'€\s*(\d{2,3}(?:\.\d{3})+)',           # € 395.000 (fallback)
+                ]
+                
+                for pattern in price_patterns:
+                    matches = re.findall(pattern, all_text, re.IGNORECASE)
+                    if matches:
+                        # Check if it's not monthly rent
+                        context_start = max(0, all_text.find(f"€ {matches[0]}") - 50)
+                        context_end = min(len(all_text), all_text.find(f"€ {matches[0]}") + 100)
+                        context = all_text[context_start:context_end].lower()
+                        
+                        if 'per maand' not in context and 'maandlasten' not in context:
+                            if 'k.k.' in pattern or 'kk' in pattern or 'kosten koper' in pattern:
+                                data['asking_price'] = f"€ {matches[0]} k.k."
+                            elif 'vk' in pattern:
+                                data['asking_price'] = f"€ {matches[0]} vk"
+                            else:
+                                data['asking_price'] = f"€ {matches[0]}"
+                            price_found = True
+                            break
+            except:
+                pass
+            
+            # Method 2: Look in structured data (JSON-LD)
+            if not price_found:
+                try:
+                    scripts = soup.find_all('script', type='application/ld+json')
+                    for script in scripts:
+                        try:
+                            import json
+                            data_json = json.loads(script.string)
+                            if isinstance(data_json, dict) and 'offers' in data_json:
+                                price = data_json['offers'].get('price')
+                                if price:
+                                    data['asking_price'] = f"€ {price:,.0f}".replace(',', '.')
+                                    price_found = True
+                                    break
+                        except:
+                            continue
+                except:
+                    pass
+            
+            # Enhanced area extraction
+            # Method 1: Look in dt/dd pairs
             dt_elements = soup.find_all('dt')
             for dt in dt_elements:
                 try:
@@ -122,6 +208,7 @@ class OnlineFundaScraper:
                             area_match = re.search(r'(\d+(?:[,\.]\d+)?)\s*m[²2]?', dd_text)
                             if area_match:
                                 data['area_m2'] = area_match.group(1).replace(',', '.')
+                                break
                     
                     elif 'energielabel' in dt_text or 'energie' in dt_text:
                         dd = dt.find_next_sibling('dd')
@@ -132,6 +219,31 @@ class OnlineFundaScraper:
                                 data['energy_label'] = energy_match.group(1)
                 except:
                     continue
+            
+            # Method 2: Look for area in all text if not found
+            if not data['area_m2']:
+                try:
+                    all_text = soup.get_text()
+                    # Look for patterns like "71 m²" or "71m2"
+                    area_matches = re.findall(r'(\d+(?:[,\.]\d+)?)\s*m[²2]', all_text)
+                    for match in area_matches:
+                        area_value = float(match.replace(',', '.'))
+                        if 10 <= area_value <= 1000:  # Reasonable house size
+                            data['area_m2'] = match.replace(',', '.')
+                            break
+                except:
+                    pass
+            
+            # Method 3: Look for energy label in all text if not found
+            if not data['energy_label']:
+                try:
+                    all_text = soup.get_text()
+                    # Look for "Energielabel A" or similar
+                    energy_matches = re.findall(r'[Ee]nergielabel[:\s]*([A-G])', all_text)
+                    if energy_matches:
+                        data['energy_label'] = energy_matches[0].upper()
+                except:
+                    pass
             
             return data
             
