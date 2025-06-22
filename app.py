@@ -66,7 +66,26 @@ class OnlineFundaScraper:
     def extract_property_data(self, url: str) -> dict:
         """Extract property data from Funda URL using requests/BeautifulSoup"""
         try:
-            st.info(f"🔍 Scraping: {url}")
+            # Debug: Show what we found
+            if data['address']:
+                st.success(f"✅ Found address: {data['address']}")
+            else:
+                st.warning("⚠️ Could not extract address")
+                
+            if data['asking_price']:
+                st.success(f"✅ Found price: {data['asking_price']}")
+            else:
+                st.warning("⚠️ Could not extract price")
+                
+            if data['area_m2']:
+                st.success(f"✅ Found area: {data['area_m2']} m²")
+            else:
+                st.warning("⚠️ Could not extract area")
+                
+            if data['energy_label']:
+                st.success(f"✅ Found energy label: {data['energy_label']}")
+            else:
+                st.warning("⚠️ Could not extract energy label")
             
             response = self.session.get(url, timeout=10)
             response.raise_for_status()
@@ -370,6 +389,32 @@ def main():
                     # Scrape property data
                     property_data = scraper.extract_property_data(url)
                     
+                    # Debug mode: show raw HTML snippet
+                    if st.session_state.get('debug_mode', False):
+                        with st.expander(f"🐛 Debug info for {property_data.get('address', 'Unknown')}"):
+                            try:
+                                response = scraper.session.get(url, timeout=10)
+                                soup = BeautifulSoup(response.content, 'html.parser')
+                                
+                                # Show page title
+                                title = soup.find('title')
+                                if title:
+                                    st.write(f"**Page Title:** {title.get_text()}")
+                                
+                                # Show first few h1 elements
+                                h1_elements = soup.find_all('h1')[:3]
+                                if h1_elements:
+                                    st.write("**H1 elements found:**")
+                                    for i, h1 in enumerate(h1_elements):
+                                        st.write(f"{i+1}. {h1.get_text(strip=True)}")
+                                
+                                # Show some text containing € or address patterns
+                                text_snippet = soup.get_text()[:2000]
+                                st.text_area("Raw text (first 2000 chars):", text_snippet, height=200)
+                                
+                            except Exception as e:
+                                st.error(f"Debug error: {e}")
+                    
                     # Add commute URLs
                     if property_data['address'] and work_address_1:
                         property_data['commute_url_1'] = scraper.get_commute_time_url(
@@ -412,6 +457,13 @@ def main():
             - https://www.funda.nl/detail/koop/utrecht/...
             - https://www.funda.nl/detail/koop/amsterdam/...
             """)
+        
+        if st.button("🔍 Debug Mode", use_container_width=True):
+            st.session_state.debug_mode = not st.session_state.get('debug_mode', False)
+            if st.session_state.debug_mode:
+                st.success("Debug mode ON")
+            else:
+                st.success("Debug mode OFF")
     
     # Display results
     if 'scraped_data' in st.session_state:
