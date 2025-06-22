@@ -303,7 +303,10 @@ def main():
         2. Enter your work addresses<br>
         3. Click "Scrape Properties"<br>
         4. Get Google Maps links for manual commute checking<br>
-        5. Download Excel with all data
+        5. Download Excel with all data<br><br>
+        
+        <strong>⚠️ Note about Funda's protection:</strong><br>
+        Funda blocks automated access. When blocked, the app will extract basic info from the URL structure and provide Google Maps links for manual verification of all details.
     </div>
     """, unsafe_allow_html=True)
     
@@ -489,6 +492,63 @@ def main():
         # Display data table
         st.subheader("Property Details")
         st.dataframe(df, use_container_width=True)
+        
+        # Manual data entry for blocked properties
+        if 'scraped_data' in st.session_state:
+            blocked_properties = st.session_state.scraped_data[
+                st.session_state.scraped_data['status'].str.contains('Blocked', na=False)
+            ]
+            
+            if len(blocked_properties) > 0:
+                st.subheader("🔓 Manual Data Entry for Blocked Properties")
+                st.info("Funda blocked automated access for some properties. Please enter the data manually by visiting the links.")
+                
+                for index, row in blocked_properties.iterrows():
+                    with st.expander(f"📝 Enter data for: {row['address']}"):
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.markdown(f"**🔗 [Open Funda Page]({row['link']})**")
+                            
+                            manual_address = st.text_input(
+                                "Address:", 
+                                value=row['address'] if row['address'] and 'error' not in row['address'].lower() else "",
+                                key=f"manual_address_{index}"
+                            )
+                            
+                            manual_price = st.text_input(
+                                "Asking Price:", 
+                                placeholder="e.g., € 395.000 k.k.",
+                                key=f"manual_price_{index}"
+                            )
+                        
+                        with col2:
+                            manual_area = st.text_input(
+                                "Area (m²):", 
+                                placeholder="e.g., 71",
+                                key=f"manual_area_{index}"
+                            )
+                            
+                            manual_energy = st.selectbox(
+                                "Energy Label:",
+                                options=["", "A", "B", "C", "D", "E", "F", "G"],
+                                key=f"manual_energy_{index}"
+                            )
+                        
+                        if st.button(f"💾 Update Property Data", key=f"update_{index}"):
+                            # Update the DataFrame
+                            if manual_address:
+                                st.session_state.scraped_data.at[index, 'address'] = manual_address
+                            if manual_price:
+                                st.session_state.scraped_data.at[index, 'asking_price'] = manual_price
+                            if manual_area:
+                                st.session_state.scraped_data.at[index, 'area_m2'] = manual_area
+                            if manual_energy:
+                                st.session_state.scraped_data.at[index, 'energy_label'] = manual_energy
+                            
+                            st.session_state.scraped_data.at[index, 'status'] = 'Manually Updated'
+                            st.success("✅ Property data updated!")
+                            st.rerun()
         
         # Commute time instructions
         if 'commute_url_1' in df.columns or 'commute_url_2' in df.columns:
